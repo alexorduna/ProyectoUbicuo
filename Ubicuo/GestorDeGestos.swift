@@ -31,8 +31,8 @@ class GestorViewModel: ObservableObject //ObservableObject que swift observa sus
         "hand.thumbsup",
         "hand.wave",
         "hands.clap",
-        "hands.point.right",
-        "hand.raised.fill"
+        "hand.point.right",
+        "hand.raised"
     ]
     
     init()
@@ -115,6 +115,7 @@ struct GestionDeGestosView: View
         .alert("Guardado!", isPresented: $mostrarConfirmacion){
             Button("OK", role:.cancel){}
         } message:{Text("Tus frases han sido guardadas correctamente.")}
+            .padding(15)
     }
 }
 
@@ -123,9 +124,9 @@ struct GestionDeGestosView: View
 
 struct GestoRow: View
 {
-    @Binding var gesto: Gesto
-    @State private var editando = false
-    @FocusState private var campoActivo: Bool
+    @Binding var gesto: Gesto // referencia a un estado de otra vista
+    @State private var editando = false // es como el useState de react, variable local de la vista
+    @FocusState private var campoActivo: Bool //para controlar el foco del teclado en una vista
     
     var body: some View
     {
@@ -175,5 +176,7 @@ struct GestoRow: View
 
 #Preview
 {
-    GestionDeGestosView()
+    NavigationStack{
+        GestionDeGestosView()
+    }
 }

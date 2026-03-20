@@ -49,7 +49,7 @@ struct ContentView: View
                     Spacer()
                     
                     //card1
-                    NavigationLink(destination:PerfilView())
+                    NavigationLink(destination:GestionDeGestosView())
                     {
                         MenuCard(
                             icon:
@@ -112,27 +112,7 @@ struct ContentView: View
 }
 
 
-
-struct PerfilView: View
+#Preview
 {
-    var body: some View
-    {
-        Text("Gestionr Gestos")
-    }
-}
-
-struct Camara: View
-{
-    var body: some View
-    {
-        Text("Camara")
-    }
-}
-
-
-
-
-
-#Preview {
     ContentView()
 }
