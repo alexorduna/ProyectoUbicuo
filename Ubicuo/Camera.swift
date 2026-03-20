@@ -155,15 +155,23 @@ final class CamaraController: NSObject, ObservableObject
     {
         //Deteccion de manos (VNDetectHumanandPoseRequest)
         let handRequest = VNDetectHumanHandPoseRequest {[weak self] request, error in self?.procesarResultadosManos(request:request,error:error)}
-        
+        //VNDetectHumanHandPoseRequest detecta manos, suspuntos clave y la postura de los dedos
+        // {[weak self] request, error in self?.procesarResultadosManos(request:request,error:error)}: Cuando Vision termine de analizar un frame y detecte manos, ejecuta este bloque.
         handRequest.maximumHandCount = 2
         
         solicitudesVision = [handRequest]
+        
+//        Vision analiza el frame
+//        Vision detecta manos
+//        Vision llama tu closure
+//        Tú procesas el resultado en tu función procesarResultadosManos
     }
     
     // Procesar resultados de manos
     private func procesarResultadosManos(request: VNRequest, error: Error?)
     {
+        //request.results contiene el resultado del análisis de Vision.
+        // VNHumanHandPoseObservation que es la lista de manos detectadas.
         guard let observaciones = request.results as? [VNHumanHandPoseObservation], !observaciones.isEmpty
         else
         {
@@ -200,21 +208,31 @@ final class CamaraController: NSObject, ObservableObject
         {
             self.resultadoVision = textos.joined(separator: " | ")
         }
-        
+            
+//        Recibe el resultado de Vision
+//        Verifica si hay manos
+//        Saca el pulgar e índice de cada mano
+//        Calcula qué tan cerca están
+//        Decide si es "👌 OK" o "🤚 Palma Abierta"
+//        Actualiza la UI con el resultado
         
     }
-    
-    
 }
 
 
-extension CamaraController :  AVCaptureVideoDataOutputSampleBufferDelegate
+nonisolated extension  CamaraController :  AVCaptureVideoDataOutputSampleBufferDelegate
 {
     //procesar frames con vision
-    nonisolated func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection)
+    //uando AVFoundation captura un frame, llama a esta función
+     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection)
     {
+        
+//        sampleBuffer = el frame crudo que da AVFoundation
+//        Lo conviertes a pixelBuffer, que es el formato que Vision usa para procesar imágenes
+//        Si no se puede convertir → simplemente saltas ese frame
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {return}
         
+        //Calcular la orientación correcta del frame
         let orientacion: CGImagePropertyOrientation = posicionActual == .front ? .leftMirrored : .right
         
         let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: orientacion, options:[:])
@@ -227,6 +245,8 @@ extension CamaraController :  AVCaptureVideoDataOutputSampleBufferDelegate
         {
             print("Error VIsion: \(error)")
         }
+        
+//      Esta función recibe cada frame de la cámara, lo prepara para Vision y luego ejecuta la detección de manos usando las solicitudes configuradas. Es el puente entre AVFoundation y Vision.
     }
 }
 
@@ -235,17 +255,21 @@ extension CamaraController :  AVCaptureVideoDataOutputSampleBufferDelegate
 
 class CamaraPreviewViewController: UIViewController
 {
+    //es digamos el controlador de la vista a diferencia del del otro, su funcion es mostrar en pantalla el preview de la cámara usando un AVCaptureVideoPreviewLayer.
     var camaraController: CamaraController?
-    var previewLayer: AVCaptureVideoPreviewLayer?
-    
+    var previewLayer: AVCaptureVideoPreviewLayer? //Es la capa que renderiza el video en vivo directamente desde AVCaptureSession.
+
     override func viewDidLoad()
     {
         super.viewDidLoad()
         view.backgroundColor = .black
+//        Este método se llama cuando la vista se crea.
+//        Solo pones el fondo negro (por si la cámara tarda en cargar).
     }
     
     func agregarPreviewLayer(session: AVCaptureSession)
     {
+//        “Rellena toda la pantalla con el video, aunque se recorte un poco”.
         previewLayer?.removeFromSuperlayer( )
         let layer = AVCaptureVideoPreviewLayer(session:session)
         layer.videoGravity = .resizeAspectFill
@@ -258,6 +282,10 @@ class CamaraPreviewViewController: UIViewController
     {
         super.viewDidLayoutSubviews()
         previewLayer?.frame = view.bounds
+//        Este método se llama:
+//        cuando rota el dispositivo
+//        cuando cambia el tamaño de la vista
+//        en cambios de layout en general
     }
 }
 
