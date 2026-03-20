@@ -11,25 +11,33 @@ import Vision
 import Combine
 
 
-class CamaraController: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBufferDelegate
+final class CamaraController: NSObject, ObservableObject
 {
     // Estado pubicado a SwiftUI
-    @Published var resultadoVision: String = ""
+    @Published var resultadoVision: String = "" //como es observable object, estos son los datos que se observan para el cambio
     @Published var mostrarAlertaPermisos: Bool = false
     
     
     // AVFoundation
-    private let session = AVCaptureSession( )
-    private var posicionActual: AVCaptureDevice.Position = .back
-    private let videoOutput = AVCaptureVideoDataOutput()
+    private let session = AVCaptureSession() //sesion principal de la camara
+    nonisolated(unsafe) private var posicionActual: AVCaptureDevice.Position = .back //que camara se usa, frontal o trasera
+    // nonisolated(unsafe) permite acceder desde un contexto nonisolated. es unsafe porque nosotros garantizamos manualmente que el acceso es thread-safe (solo se leen en visionQueue, solo se escriben en sessionQueue/configurarSesion)
+    
+    private let videoOutput = AVCaptureVideoDataOutput() //objeto que etnrega los frames de video
+    
+    //Un dispatchQueue es un queue pero de hilos
+    //lo tenemos separado, para tener un mejor control de los threads y que otros no se bloqueen
     private let sessionQueue = DispatchQueue(label: "camera.session.queue")
     private let visionQueue = DispatchQueue(label: "vision.queue")
     
     //Vision
-    private var solicitudesVision: [VNRequest] = []
+    nonisolated(unsafe) private var solicitudesVision: [VNRequest] = [] //Es un arreglo donde guardas todas las “tareas” que Vision debe ejecutar sobre cada frame.
+    // en este caso VNDetectHumanHandPoseRequest para detectar manos, configurado en la funcion.
     
     // Referencia al VC para agregar el preview layer
     weak var previewVC: CamaraPreviewViewController?
+    //Significa que no incrementa el contador de referencias. Esto evita ciclos de retención (memory leaks).
+    //CamaraPreviewViewController tiene una relacion strong, y CamaraController una weak
     
     
     func solicitarPermisos()
@@ -46,6 +54,7 @@ class CamaraController: NSObject, ObservableObject, AVCaptureVideoDataOutputSamp
                     }
                     else
                     {
+                        //aqui ejecutamos un thread en el queue principal (main) a diferencia de los otros
                         DispatchQueue.main.async
                         {
                             self?.mostrarAlertaPermisos = true
@@ -63,17 +72,22 @@ class CamaraController: NSObject, ObservableObject, AVCaptureVideoDataOutputSamp
     
     func configurarSesion(posicion: AVCaptureDevice.Position = .back)
     {
+        //aseguramos que todo se realice en un hilo seguro sin bloquear la UI ni generar race conditions
         sessionQueue.async
         {
+            //solo continua el codigo si self existe
             [weak self] in guard let self else {return}
             
-            self.session.beginConfiguration()
+            self.session.beginConfiguration() //modificamos sesion, pero no se aplican los cambios hasta terminar
             
-            //limpiar inputs anteriores
+            //limpiar inputs anteriores (por si se cambia la camara frontal o trasera
             self.session.inputs.forEach{self.session.removeInput($0)}
                                         
             // agregar nuevo input
             guard
+                // obtenemos camara utilizada
+                //creamos el input a partir de la camara
+                // verificamos que AVFoundation permita agregarlo
                 let device = AVCaptureDevice.default(.builtInWideAngleCamera, for:.video, position: posicion),
                 let input = try? AVCaptureDeviceInput(device: device),
                     self.session.canAddInput(input)
@@ -83,6 +97,7 @@ class CamaraController: NSObject, ObservableObject, AVCaptureVideoDataOutputSamp
                 return
             }
             
+            //guarda la posicion actual de la camara
             self.session.addInput(input)
             self.posicionActual = posicion
             
@@ -91,7 +106,7 @@ class CamaraController: NSObject, ObservableObject, AVCaptureVideoDataOutputSamp
             
             if self.session.outputs.isEmpty
             {
-                self.videoOutput.setSampleBufferDelegate(self,queue:self.visionQueue)
+                self.videoOutput.setSampleBufferDelegate(self, queue:self.visionQueue) //Cada vez que la cámara genere un frame, envíalo a esta función en el hilo visionQueue
                 self.videoOutput.alwaysDiscardsLateVideoFrames = true
                 if self.session.canAddOutput(self.videoOutput)
                 {
@@ -100,7 +115,7 @@ class CamaraController: NSObject, ObservableObject, AVCaptureVideoDataOutputSamp
             }
             
             
-            self.session.commitConfiguration()
+            self.session.commitConfiguration() //ahora si mandamos las configuraciones
             
             //Agregar preview layer en hilo principal
             DispatchQueue.main.async
@@ -108,7 +123,7 @@ class CamaraController: NSObject, ObservableObject, AVCaptureVideoDataOutputSamp
                 self.previewVC?.agregarPreviewLayer(session: self.session)
             }
             
-            //Iniciar sesion
+            //Iniciar sesion, arrancamos camara si no esta prendida
             if !self.session.isRunning
             {
                 self.session.startRunning()
@@ -145,27 +160,6 @@ class CamaraController: NSObject, ObservableObject, AVCaptureVideoDataOutputSamp
         
         solicitudesVision = [handRequest]
     }
-    
-    //procesar frames con vision
-    func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection)
-    {
-        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {return}
-        
-        let orientacion: CGImagePropertyOrientation = posicionActual == .front ? .leftMirrored : .right
-        
-        let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: orientacion, options:[:])
-        
-        do
-        {
-            try handler.perform(solicitudesVision)
-        }
-        catch
-        {
-            print("Error VIsion: \(error)")
-        }
-    }
-    
-    
     
     // Procesar resultados de manos
     private func procesarResultadosManos(request: VNRequest, error: Error?)
@@ -212,6 +206,32 @@ class CamaraController: NSObject, ObservableObject, AVCaptureVideoDataOutputSamp
     
     
 }
+
+
+extension CamaraController :  AVCaptureVideoDataOutputSampleBufferDelegate
+{
+    //procesar frames con vision
+    nonisolated func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection)
+    {
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {return}
+        
+        let orientacion: CGImagePropertyOrientation = posicionActual == .front ? .leftMirrored : .right
+        
+        let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: orientacion, options:[:])
+        
+        do
+        {
+            try handler.perform(solicitudesVision)
+        }
+        catch
+        {
+            print("Error VIsion: \(error)")
+        }
+    }
+}
+
+
+
 
 class CamaraPreviewViewController: UIViewController
 {
