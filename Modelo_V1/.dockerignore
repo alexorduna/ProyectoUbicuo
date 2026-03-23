@@ -1,0 +1,13 @@
+# Entorno virtual — Docker instala sus propias dependencias
+.venv/
+
+# Cache de Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Archivos de VS Code
+.vscode/
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
