@@ -30,6 +30,9 @@ Modelo_V1/
     ├── X_landmarks.npy
     └── y_labels.npy
 ```
+#### Link para descargar el cache y los modelos para poder correr el codigo correctamente 
+https://drive.google.com/drive/folders/1_SSX2huhgwJUGNN-kOMdi628UOHtKeQx?usp=drive_link
+
 ## Inicio rápido
 ### 1. Construir la imagen
 Básicamente crea todo lo que se necesita para poder correr el proyecto se necesita estar en la carpeta del proyecto.
