@@ -167,7 +167,73 @@ final class CamaraController: NSObject, ObservableObject
 //        Tú procesas el resultado en tu función procesarResultadosManos
     }
     
+    
+    //Convertir puntos normalizados a coordenadas de pantalla
+    //Vision entrega puntos en coordenadas normalizadas (0–1)
+    private func convertir(_ punto: VNRecognizedPoint, en size: CGSize) -> CGPoint {
+        return CGPoint(
+            x: punto.location.x * size.width,
+            y: (1 - punto.location.y) * size.height // invertir Y para UIKit
+        )
+    }
+
+    //Función para dibujar el esqueleto completo de la mano
+    private func dibujarEsqueleto(para mano: VNHumanHandPoseObservation) {
+        guard let view = previewVC?.view else { return }
+        let size = view.bounds.size
+        let shapeLayer = CAShapeLayer()
+        let path = UIBezierPath()
+
+        // Intentar obtener todos los puntos posibles
+        guard let puntos = try? mano.recognizedPoints(.all) else { return }
+
+        // Conexiones entre articulaciones (esqueleto)
+        let conexiones: [(VNHumanHandPoseObservation.JointName, VNHumanHandPoseObservation.JointName)] = [
+            (.wrist, .thumbCMC), (.thumbCMC, .thumbMP), (.thumbMP, .thumbIP), (.thumbIP, .thumbTip),
+            (.wrist, .indexMCP), (.indexMCP, .indexPIP), (.indexPIP, .indexDIP), (.indexDIP, .indexTip),
+            (.wrist, .middleMCP), (.middleMCP, .middlePIP), (.middlePIP, .middleDIP), (.middleDIP, .middleTip),
+            (.wrist, .ringMCP), (.ringMCP, .ringPIP), (.ringPIP, .ringDIP), (.ringDIP, .ringTip),
+            (.wrist, .littleMCP), (.littleMCP, .littlePIP), (.littlePIP, .littleDIP), (.littleDIP, .littleTip),
+        ]
+
+        // 🟦 Dibujar lineas del esqueleto
+        for (a, b) in conexiones {
+            if let p1 = puntos[a], p1.confidence > 0.3,
+               let p2 = puntos[b], p2.confidence > 0.3 {
+
+                let c1 = convertir(p1, en: size)
+                let c2 = convertir(p2, en: size)
+
+                path.move(to: c1)
+                path.addLine(to: c2)
+            }
+        }
+
+        // 🔵 También puedes dibujar nodos individuales (opcional)
+        for (_, p) in puntos {
+            if p.confidence > 0.3 {
+                let c = convertir(p, en: size)
+                let circle = UIBezierPath(ovalIn: CGRect(x: c.x-3, y: c.y-3, width: 6, height: 6))
+                path.append(circle)
+            }
+        }
+
+        shapeLayer.path = path.cgPath
+        shapeLayer.strokeColor = UIColor.systemBlue.cgColor
+        shapeLayer.fillColor = UIColor.systemBlue.withAlphaComponent(0.3).cgColor
+        shapeLayer.lineWidth = 2
+        shapeLayer.name = "handSkeleton"
+
+        DispatchQueue.main.async {
+            // Eliminar skeleton anterior para evitar capas acumuladas
+            view.layer.sublayers?.removeAll(where: { $0.name == "handSkeleton" })
+            view.layer.addSublayer(shapeLayer)
+        }
+    }
+
+    
     // Procesar resultados de manos
+    // Chris Alex modificar esta funcion para que haga uso del modelo
     private func procesarResultadosManos(request: VNRequest, error: Error?)
     {
         //request.results contiene el resultado del análisis de Vision.
@@ -202,7 +268,7 @@ final class CamaraController: NSObject, ObservableObject
                 let gesto = distancia < 0.05 ? "👌 OK" : " 🤚 Palma Abierta"
                 textos.append("Mano \(i+1): \(gesto)")
             }
-            
+            dibujarEsqueleto(para: mano)
         }
         DispatchQueue.main.async
         {
@@ -265,6 +331,11 @@ class CamaraPreviewViewController: UIViewController
         view.backgroundColor = .black
 //        Este método se llama cuando la vista se crea.
 //        Solo pones el fondo negro (por si la cámara tarda en cargar).
+        
+            camaraController = CamaraController()
+            camaraController?.previewVC = self 
+            camaraController?.solicitarPermisos()
+
     }
     
     func agregarPreviewLayer(session: AVCaptureSession)
