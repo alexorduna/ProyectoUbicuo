@@ -1,0 +1,39 @@
+{
+  "proyecto": "SignSpeaker",
+  "modelo": "RandomForestClassifier",
+  "version": "1.0",
+  "n_estimators": 300,
+  "n_features": 42,
+  "formato_input": "21 landmarks × (x, y) normalizado a muneca — sin z",
+  "n_clases": 9,
+  "gestos": {
+    "0": "call",
+    "1": "dislike",
+    "2": "fist",
+    "3": "like",
+    "4": "ok",
+    "5": "one",
+    "6": "palm",
+    "7": "peace",
+    "8": "rock"
+  },
+  "metricas": {
+    "f1_macro": 0.8591,
+    "accuracy": 0.8639,
+    "recall_alerta": 0.9079
+  },
+  "umbrales_mvp": {
+    "f1_macro_min": 0.88,
+    "accuracy_min": 0.9,
+    "alert_recall_min": 0.9
+  },
+  "dataset": "HaGRID normalized",
+  "split": "80/20 estratificado",
+  "equipo": [
+    "Christofer Castaneda",
+    "Ivan Mijares",
+    "Alexander Orduna"
+  ],
+  "clase": "Computo Ubicuo — CETYS Universidad",
+  "profesor": "Adan Hirales"
+}
