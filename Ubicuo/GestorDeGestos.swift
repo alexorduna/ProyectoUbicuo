@@ -25,14 +25,14 @@ class GestorViewModel: ObservableObject //ObservableObject que swift observa sus
     private let totalGestos = 8
     
     private let iconos = [
-        "hand.raised",
-        "hand.raised.fingers.spread",
-        "hand.point.up",
-        "hand.thumbsup",
-        "hand.wave",
-        "hands.clap",
-        "hand.point.right",
-        "hand.raised"
+        "👎",
+        "✊",
+        "👍",
+        "👌",
+        "☝️",
+        "✋",
+        "✌️",
+        "🤘"
     ]
     
     init()
@@ -137,11 +137,9 @@ struct GestoRow: View
                 .frame(width:20, alignment: .trailing)
                 .foregroundColor(.secondary)
             
-            Image(systemName: gesto.icono)
-                .resizable()
+            Text(gesto.icono)
                 .scaledToFit()
                 .frame(width: 28, height: 28)
-                .foregroundColor(.primary)
             
             TextField("Frase para Gesto \(gesto.id)", text: $gesto.frase)
                 .font(.system(size:15))
