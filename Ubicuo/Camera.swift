@@ -15,6 +15,8 @@ final class CamaraController: NSObject, ObservableObject
 {
     // Estado pubicado a SwiftUI
     @Published var resultadoVision: String = "" //como es observable object, estos son los datos que se observan para el cambio
+    private let gestureEngine = GestureEngine()
+    private var gesturePhrases: [Int:String] = [:]
     @Published var mostrarAlertaPermisos: Bool = false
     
     
@@ -42,6 +44,15 @@ final class CamaraController: NSObject, ObservableObject
     
     func solicitarPermisos()
     {
+        for i in 1...9 {
+            let order = ["call", "dislike", "fist", "like", "ok", "one", "palm", "peace", "rock"]
+            let frase = UserDefaults.standard.string(forKey: "gesto_\(i)") ?? order[i - 1]
+            gesturePhrases[i] = frase
+        }
+
+        gestureEngine.onGestureConfirmed = { [weak self] gestureName, phrase in
+            self?.resultadoVision = "\(gestureName): \(phrase)"
+        }
         switch AVCaptureDevice.authorizationStatus(for: .video)
         {
             case .authorized:
@@ -250,29 +261,33 @@ final class CamaraController: NSObject, ObservableObject
         
         //por cada mano detectada extramenos los puntos clave
         
-        var textos: [String] = []
-        
+      
         for (i,mano) in observaciones.enumerated()
         {
-            if let pulgar = try? mano.recognizedPoint(.thumbTip),
-               let indice = try? mano.recognizedPoint(.indexTip),
-               pulgar.confidence > 0.5 && indice.confidence > 0.5
-            {
-                //Distancia entre pulgar e indice (normalizdo 0/1)
-                
-                let dx = pulgar.location.x - indice.location.x
-                let dy = pulgar.location.y - indice.location.y
-                let distancia = sqrt(dx*dx+dy*dy)
-                
-                
-                let gesto = distancia < 0.05 ? "👌 OK" : " 🤚 Palma Abierta"
-                textos.append("Mano \(i+1): \(gesto)")
+            
+            gestureEngine.process(observation: mano, gesturePhrases: gesturePhrases)
+            if let points = try? mano.recognizedPoints(.all) {
+                let order: [VNHumanHandPoseObservation.JointName] = [
+                    .wrist,
+                    .thumbCMC, .thumbMP, .thumbIP, .thumbTip,
+                    .indexMCP, .indexPIP, .indexDIP, .indexTip,
+                    .middleMCP, .middlePIP, .middleDIP, .middleTip,
+                    .ringMCP, .ringPIP, .ringDIP, .ringTip,
+                    .littleMCP, .littlePIP, .littleDIP, .littleTip
+                ]
+                var log = "=== LANDMARKS ===\n"
+                for (i, joint) in order.enumerated() {
+                    if let p = points[joint] {
+                        log += "[\(i)] x:\(String(format: "%.3f", p.location.x)) y:\(String(format: "%.3f", p.location.y)) conf:\(String(format: "%.2f", p.confidence))\n"
+                    }
+                }
+                print(log)
             }
             dibujarEsqueleto(para: mano)
         }
         DispatchQueue.main.async
         {
-            self.resultadoVision = textos.joined(separator: " | ")
+            
         }
             
 //        Recibe el resultado de Vision
