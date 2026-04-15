@@ -295,7 +295,7 @@ private func dibujarEsqueleto(para mano: VNHumanHandPoseObservation)
 nonisolated extension  CamaraController :  AVCaptureVideoDataOutputSampleBufferDelegate
 {
     //procesar frames con vision
-    //uando AVFoundation captura un frame, llama a esta función
+    //Cuando AVFoundation captura un frame, llama a esta función
      func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection)
     {
         

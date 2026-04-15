@@ -22,9 +22,10 @@ class GestorViewModel: ObservableObject //ObservableObject que swift observa sus
 {
     @Published var gestos: [Gesto] = []
     
-    private let totalGestos = 8
+    private let totalGestos = 9
     
     private let iconos = [
+        "🤙",
         "👎",
         "✊",
         "👍",
