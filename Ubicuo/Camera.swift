@@ -81,71 +81,60 @@ final class CamaraController: NSObject, ObservableObject
     }
     
     
-    func configurarSesion(posicion: AVCaptureDevice.Position = .back)
+   func configurarSesion(posicion: AVCaptureDevice.Position = .back)
+{
+    sessionQueue.async
     {
-        //aseguramos que todo se realice en un hilo seguro sin bloquear la UI ni generar race conditions
-        sessionQueue.async
+        [weak self] in guard let self else { return }
+        
+        self.session.beginConfiguration()
+        
+        // Limpiar inputs anteriores
+        self.session.inputs.forEach { self.session.removeInput($0) }
+        
+        // Agregar nuevo input
+        guard
+            let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: posicion),
+            let input = try? AVCaptureDeviceInput(device: device),
+            self.session.canAddInput(input)
+        else
         {
-            //solo continua el codigo si self existe
-            [weak self] in guard let self else {return}
-            
-            self.session.beginConfiguration() //modificamos sesion, pero no se aplican los cambios hasta terminar
-            
-            //limpiar inputs anteriores (por si se cambia la camara frontal o trasera
-            self.session.inputs.forEach{self.session.removeInput($0)}
-                                        
-            // agregar nuevo input
-            guard
-                // obtenemos camara utilizada
-                //creamos el input a partir de la camara
-                // verificamos que AVFoundation permita agregarlo
-                let device = AVCaptureDevice.default(.builtInWideAngleCamera, for:.video, position: posicion),
-                let input = try? AVCaptureDeviceInput(device: device),
-                    self.session.canAddInput(input)
-            else
-            {
-                self.session.commitConfiguration()
-                return
-            }
-            
-            //guarda la posicion actual de la camara
-            self.session.addInput(input)
-            self.posicionActual = posicion
-            
-            
-            //Configurar outpur de video
-            
-            if self.session.outputs.isEmpty
-            {
-                self.videoOutput.setSampleBufferDelegate(self, queue:self.visionQueue) //Cada vez que la cámara genere un frame, envíalo a esta función en el hilo visionQueue
-                self.videoOutput.alwaysDiscardsLateVideoFrames = true
-                if self.session.canAddOutput(self.videoOutput)
-                {
-                    self.session.addOutput(self.videoOutput)
-                }
-            }
-            
-            
-            self.session.commitConfiguration() //ahora si mandamos las configuraciones
-            
-            //Agregar preview layer en hilo principal
-            DispatchQueue.main.async
-            {
-                self.previewVC?.agregarPreviewLayer(session: self.session)
-            }
-            
-            //Iniciar sesion, arrancamos camara si no esta prendida
-            if !self.session.isRunning
-            {
-                self.session.startRunning()
-            }
-            
-            //configurar vision
-            self.configurarVision()
-            
+            self.session.commitConfiguration()
+            return
         }
-    
+        
+        self.session.addInput(input)
+        self.posicionActual = posicion
+        
+        // Configurar output de video
+        if self.session.outputs.isEmpty
+        {
+            self.videoOutput.setSampleBufferDelegate(self, queue: self.visionQueue)
+            self.videoOutput.alwaysDiscardsLateVideoFrames = true
+            if self.session.canAddOutput(self.videoOutput)
+            {
+                self.session.addOutput(self.videoOutput)
+            }
+        }
+        
+        self.session.commitConfiguration()
+        
+        // ✅ Vision lista antes de arrancar la cámara
+        self.configurarVision()
+        
+        // ✅ Arrancar sesion primero
+        if !self.session.isRunning
+        {
+            self.session.startRunning()
+        }
+        
+        // ✅ Preview layer al final, ya sin competir con startRunning
+        DispatchQueue.main.async
+        {
+            self.previewVC?.agregarPreviewLayer(session: self.session)
+        }
     }
+}
     
     
     func cambiarCamara()
@@ -189,58 +178,60 @@ final class CamaraController: NSObject, ObservableObject
     }
 
     //Función para dibujar el esqueleto completo de la mano
-    private func dibujarEsqueleto(para mano: VNHumanHandPoseObservation) {
-        guard let view = previewVC?.view else { return }
-        let size = view.bounds.size
-        let shapeLayer = CAShapeLayer()
-        let path = UIBezierPath()
+private func dibujarEsqueleto(para mano: VNHumanHandPoseObservation)
+{
+    guard let view = previewVC?.view else { return }
+    let size = view.bounds.size
+    let path = UIBezierPath()
 
-        // Intentar obtener todos los puntos posibles
-        guard let puntos = try? mano.recognizedPoints(.all) else { return }
+    guard let puntos = try? mano.recognizedPoints(.all) else { return }
 
-        // Conexiones entre articulaciones (esqueleto)
-        let conexiones: [(VNHumanHandPoseObservation.JointName, VNHumanHandPoseObservation.JointName)] = [
-            (.wrist, .thumbCMC), (.thumbCMC, .thumbMP), (.thumbMP, .thumbIP), (.thumbIP, .thumbTip),
-            (.wrist, .indexMCP), (.indexMCP, .indexPIP), (.indexPIP, .indexDIP), (.indexDIP, .indexTip),
-            (.wrist, .middleMCP), (.middleMCP, .middlePIP), (.middlePIP, .middleDIP), (.middleDIP, .middleTip),
-            (.wrist, .ringMCP), (.ringMCP, .ringPIP), (.ringPIP, .ringDIP), (.ringDIP, .ringTip),
-            (.wrist, .littleMCP), (.littleMCP, .littlePIP), (.littlePIP, .littleDIP), (.littleDIP, .littleTip),
-        ]
+    let conexiones: [(VNHumanHandPoseObservation.JointName, VNHumanHandPoseObservation.JointName)] = [
+        (.wrist, .thumbCMC), (.thumbCMC, .thumbMP), (.thumbMP, .thumbIP), (.thumbIP, .thumbTip),
+        (.wrist, .indexMCP), (.indexMCP, .indexPIP), (.indexPIP, .indexDIP), (.indexDIP, .indexTip),
+        (.wrist, .middleMCP), (.middleMCP, .middlePIP), (.middlePIP, .middleDIP), (.middleDIP, .middleTip),
+        (.wrist, .ringMCP), (.ringMCP, .ringPIP), (.ringPIP, .ringDIP), (.ringDIP, .ringTip),
+        (.wrist, .littleMCP), (.littleMCP, .littlePIP), (.littlePIP, .littleDIP), (.littleDIP, .littleTip),
+    ]
 
-        // 🟦 Dibujar lineas del esqueleto
-        for (a, b) in conexiones {
-            if let p1 = puntos[a], p1.confidence > 0.3,
-               let p2 = puntos[b], p2.confidence > 0.3 {
-
-                let c1 = convertir(p1, en: size)
-                let c2 = convertir(p2, en: size)
-
-                path.move(to: c1)
-                path.addLine(to: c2)
-            }
+    for (a, b) in conexiones {
+        if let p1 = puntos[a], p1.confidence > 0.3,
+           let p2 = puntos[b], p2.confidence > 0.3 {
+            let c1 = convertir(p1, en: size)
+            let c2 = convertir(p2, en: size)
+            path.move(to: c1)
+            path.addLine(to: c2)
         }
+    }
 
-        // 🔵 También puedes dibujar nodos individuales (opcional)
-        for (_, p) in puntos {
-            if p.confidence > 0.3 {
-                let c = convertir(p, en: size)
-                let circle = UIBezierPath(ovalIn: CGRect(x: c.x-3, y: c.y-3, width: 6, height: 6))
-                path.append(circle)
-            }
+    for (_, p) in puntos {
+        if p.confidence > 0.3 {
+            let c = convertir(p, en: size)
+            let circle = UIBezierPath(ovalIn: CGRect(x: c.x-3, y: c.y-3, width: 6, height: 6))
+            path.append(circle)
         }
+    }
 
-        shapeLayer.path = path.cgPath
-        shapeLayer.strokeColor = UIColor.systemBlue.cgColor
-        shapeLayer.fillColor = UIColor.systemBlue.withAlphaComponent(0.3).cgColor
-        shapeLayer.lineWidth = 2
-        shapeLayer.name = "handSkeleton"
-
-        DispatchQueue.main.async {
-            // Eliminar skeleton anterior para evitar capas acumuladas
-            view.layer.sublayers?.removeAll(where: { $0.name == "handSkeleton" })
+    DispatchQueue.main.async {
+        // ✅ Reusar capa existente en lugar de crear una nueva cada frame
+        if let existing = view.layer.sublayers?
+            .first(where: { $0.name == "handSkeleton" }) as? CAShapeLayer
+        {
+            existing.path = path.cgPath // solo actualizamos el path
+        }
+        else
+        {
+            // Solo se crea una vez
+            let shapeLayer = CAShapeLayer()
+            shapeLayer.strokeColor = UIColor.systemBlue.cgColor
+            shapeLayer.fillColor = UIColor.systemBlue.withAlphaComponent(0.3).cgColor
+            shapeLayer.lineWidth = 2
+            shapeLayer.name = "handSkeleton"
+            shapeLayer.path = path.cgPath
             view.layer.addSublayer(shapeLayer)
         }
     }
+}
 
     
     // Procesar resultados de manos
@@ -281,14 +272,14 @@ final class CamaraController: NSObject, ObservableObject
                         log += "[\(i)] x:\(String(format: "%.3f", p.location.x)) y:\(String(format: "%.3f", p.location.y)) conf:\(String(format: "%.2f", p.confidence))\n"
                     }
                 }
-                print(log)
+                // print(log)
             }
             dibujarEsqueleto(para: mano)
         }
-        DispatchQueue.main.async
-        {
+        // DispatchQueue.main.async
+        // {
             
-        }
+        // }
             
 //        Recibe el resultado de Vision
 //        Verifica si hay manos
