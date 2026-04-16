@@ -98,21 +98,25 @@ final class CamaraController: NSObject, ObservableObject
             }
 
             self.session.commitConfiguration()
-
-            DispatchQueue.main.async {
-                self.previewVC?.agregarPreviewLayer(session: self.session)
-            }
-
-            if !self.session.isRunning {
+            
+            // ✅ Vision lista antes de arrancar la cámara
+            self.configurarVision()
+            
+            // ✅ Arrancar sesion primero
+            if !self.session.isRunning
+            {
                 self.session.startRunning()
             }
-
+            
+            // ✅ Preview layer al final, ya sin competir con startRunning
+            DispatchQueue.main.async
+            {
+                self.previewVC?.agregarPreviewLayer(session: self.session)
+            }
             // <- NUEVO: marcar cámara lista
             DispatchQueue.main.async {
                 self.camaraLista = true
-            }
-
-            self.configurarVision()
+            }               
         }
     }
 
@@ -183,16 +187,36 @@ final class CamaraController: NSObject, ObservableObject
             }
         }
 
-        shapeLayer.path = path.cgPath
-        shapeLayer.strokeColor = UIColor.systemBlue.cgColor
-        shapeLayer.fillColor = UIColor.systemBlue.withAlphaComponent(0.3).cgColor
-        shapeLayer.lineWidth = 2
-        shapeLayer.name = "handSkeleton"
-
         DispatchQueue.main.async {
-            view.layer.sublayers?.removeAll(where: { $0.name == "handSkeleton" })
+        // ✅ Reusar capa existente en lugar de crear una nueva cada frame
+        if let existing = view.layer.sublayers?
+            .first(where: { $0.name == "handSkeleton" }) as? CAShapeLayer
+        {
+            existing.path = path.cgPath // solo actualizamos el path
+        }
+        else
+        {
+            // Solo se crea una vez
+            let shapeLayer = CAShapeLayer()
+            shapeLayer.strokeColor = UIColor.systemBlue.cgColor
+            shapeLayer.fillColor = UIColor.systemBlue.withAlphaComponent(0.3).cgColor
+            shapeLayer.lineWidth = 2
+            shapeLayer.name = "handSkeleton"
+            shapeLayer.path = path.cgPath
             view.layer.addSublayer(shapeLayer)
         }
+    }
+
+        // shapeLayer.path = path.cgPath
+        // shapeLayer.strokeColor = UIColor.systemBlue.cgColor
+        // shapeLayer.fillColor = UIColor.systemBlue.withAlphaComponent(0.3).cgColor
+        // shapeLayer.lineWidth = 2
+        // shapeLayer.name = "handSkeleton"
+
+        // DispatchQueue.main.async {
+        //     view.layer.sublayers?.removeAll(where: { $0.name == "handSkeleton" })
+        //     view.layer.addSublayer(shapeLayer)
+        // }
     }
 
     private func procesarResultadosManos(request: VNRequest, error: Error?)
