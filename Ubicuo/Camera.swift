@@ -6,213 +6,188 @@
 //
 
 import SwiftUI
-import AVFoundation //frameworks más importantes de Apple para trabajar con audio, video y captura
+import AVFoundation
 import Vision
 import Combine
 
 
 final class CamaraController: NSObject, ObservableObject
 {
-    // Estado pubicado a SwiftUI
-    @Published var resultadoVision: String = "" //como es observable object, estos son los datos que se observan para el cambio
+    @Published var resultadoVision: String = ""
+    @Published var confidencevalue: Float = 0.0
+    @Published var mostrarAlertaPermisos: Bool = false
+    @Published var camaraLista: Bool = false  // <- NUEVO
+
     private let gestureEngine = GestureEngine()
     private var gesturePhrases: [Int:String] = [:]
-    @Published var mostrarAlertaPermisos: Bool = false
-    
-    
-    // AVFoundation
-    private let session = AVCaptureSession() //sesion principal de la camara
-    nonisolated(unsafe) private var posicionActual: AVCaptureDevice.Position = .back //que camara se usa, frontal o trasera
-    // nonisolated(unsafe) permite acceder desde un contexto nonisolated. es unsafe porque nosotros garantizamos manualmente que el acceso es thread-safe (solo se leen en visionQueue, solo se escriben en sessionQueue/configurarSesion)
-    
-    private let videoOutput = AVCaptureVideoDataOutput() //objeto que etnrega los frames de video
-    
-    //Un dispatchQueue es un queue pero de hilos
-    //lo tenemos separado, para tener un mejor control de los threads y que otros no se bloqueen
+    private let motorTTS = MotorTTS()
+    private var ultimaActivacion: Date = .distantPast
+
+    private let session = AVCaptureSession()
+    nonisolated(unsafe) private var posicionActual: AVCaptureDevice.Position = .front
+    private let videoOutput = AVCaptureVideoDataOutput()
     private let sessionQueue = DispatchQueue(label: "camera.session.queue")
     private let visionQueue = DispatchQueue(label: "vision.queue")
-    
-    //Vision
-    nonisolated(unsafe) private var solicitudesVision: [VNRequest] = [] //Es un arreglo donde guardas todas las “tareas” que Vision debe ejecutar sobre cada frame.
-    // en este caso VNDetectHumanHandPoseRequest para detectar manos, configurado en la funcion.
-    
-    // Referencia al VC para agregar el preview layer
+    nonisolated(unsafe) private var solicitudesVision: [VNRequest] = []
     weak var previewVC: CamaraPreviewViewController?
-    //Significa que no incrementa el contador de referencias. Esto evita ciclos de retención (memory leaks).
-    //CamaraPreviewViewController tiene una relacion strong, y CamaraController una weak
-    
-    
+
     func solicitarPermisos()
     {
-        for i in 1...9 {
-            let order = ["call", "dislike", "fist", "like", "ok", "one", "palm", "peace", "rock"]
+        for i in 1...8 {
+            let order = ["dislike", "fist", "like", "ok", "one", "palm", "peace", "rock"]
             let frase = UserDefaults.standard.string(forKey: "gesto_\(i)") ?? order[i - 1]
             gesturePhrases[i] = frase
         }
 
         gestureEngine.onGestureConfirmed = { [weak self] gestureName, phrase in
-            self?.resultadoVision = "\(gestureName): \(phrase)"
+            guard let self = self else { return }
+            let ahora = Date()
+            guard ahora.timeIntervalSince(self.ultimaActivacion) > 2.0 else { return }
+            self.ultimaActivacion = ahora
+            self.resultadoVision = "\(gestureName): \(phrase)"
+            self.motorTTS.hablar(texto: phrase)
         }
+
         switch AVCaptureDevice.authorizationStatus(for: .video)
         {
             case .authorized:
                 configurarSesion()
             case .notDetermined:
-                AVCaptureDevice.requestAccess(for:.video){[weak self] granted in
-                    if granted
-                    {
+                AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
+                    if granted {
                         self?.configurarSesion()
-                    }
-                    else
-                    {
-                        //aqui ejecutamos un thread en el queue principal (main) a diferencia de los otros
-                        DispatchQueue.main.async
-                        {
+                    } else {
+                        DispatchQueue.main.async {
                             self?.mostrarAlertaPermisos = true
                         }
                     }
                 }
             default:
-                DispatchQueue.main.async
-                {
+                DispatchQueue.main.async {
                     self.mostrarAlertaPermisos = true
                 }
         }
     }
-    
-    
-   func configurarSesion(posicion: AVCaptureDevice.Position = .back)
-{
-    sessionQueue.async
+
+    func configurarSesion(posicion: AVCaptureDevice.Position = .front)
     {
-        [weak self] in guard let self else { return }
-        
-        self.session.beginConfiguration()
-        
-        // Limpiar inputs anteriores
-        self.session.inputs.forEach { self.session.removeInput($0) }
-        
-        // Agregar nuevo input
-        guard
-            let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: posicion),
-            let input = try? AVCaptureDeviceInput(device: device),
-            self.session.canAddInput(input)
-        else
-        {
+        sessionQueue.async { [weak self] in
+            guard let self else { return }
+
+            self.session.beginConfiguration()
+            self.session.inputs.forEach { self.session.removeInput($0) }
+
+            guard
+                let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: posicion),
+                let input = try? AVCaptureDeviceInput(device: device),
+                self.session.canAddInput(input)
+            else {
+                self.session.commitConfiguration()
+                return
+            }
+
+            self.session.addInput(input)
+            self.posicionActual = posicion
+
+            if self.session.outputs.isEmpty {
+                self.videoOutput.setSampleBufferDelegate(self, queue: self.visionQueue)
+                self.videoOutput.alwaysDiscardsLateVideoFrames = true
+                if self.session.canAddOutput(self.videoOutput) {
+                    self.session.addOutput(self.videoOutput)
+                }
+            }
+
             self.session.commitConfiguration()
-            return
-        }
-        
-        self.session.addInput(input)
-        self.posicionActual = posicion
-        
-        // Configurar output de video
-        if self.session.outputs.isEmpty
-        {
-            self.videoOutput.setSampleBufferDelegate(self, queue: self.visionQueue)
-            self.videoOutput.alwaysDiscardsLateVideoFrames = true
-            if self.session.canAddOutput(self.videoOutput)
+            
+            // ✅ Vision lista antes de arrancar la cámara
+            self.configurarVision()
+            
+            // ✅ Arrancar sesion primero
+            if !self.session.isRunning
             {
-                self.session.addOutput(self.videoOutput)
+                self.session.startRunning()
+            }
+            
+            // ✅ Preview layer al final, ya sin competir con startRunning
+            DispatchQueue.main.async
+            {
+                self.previewVC?.agregarPreviewLayer(session: self.session)
+            }
+            // <- NUEVO: marcar cámara lista
+            DispatchQueue.main.async {
+                self.camaraLista = true
             }
         }
-        
-        self.session.commitConfiguration()
-        
-        // ✅ Vision lista antes de arrancar la cámara
-        self.configurarVision()
-        
-        // ✅ Arrancar sesion primero
-        if !self.session.isRunning
-        {
-            self.session.startRunning()
-        }
-        
-        // ✅ Preview layer al final, ya sin competir con startRunning
-        DispatchQueue.main.async
-        {
-            self.previewVC?.agregarPreviewLayer(session: self.session)
-        }
     }
-}
-    
-    
+
     func cambiarCamara()
     {
-        let nuevaPosicion: AVCaptureDevice.Position = posicionActual == .back ? .front: .back
+        let nuevaPosicion: AVCaptureDevice.Position = posicionActual == .back ? .front : .back
         configurarSesion(posicion: nuevaPosicion)
     }
-    
+
     func detener()
     {
-        sessionQueue.async
-        {
-            [weak self] in self?.session.stopRunning()
+        sessionQueue.async { [weak self] in
+            self?.session.stopRunning()
+        }
+        // <- NUEVO: resetear al salir
+        DispatchQueue.main.async {
+            self.camaraLista = false
         }
     }
-    
+
     func configurarVision()
     {
-        //Deteccion de manos (VNDetectHumanandPoseRequest)
-        let handRequest = VNDetectHumanHandPoseRequest {[weak self] request, error in self?.procesarResultadosManos(request:request,error:error)}
-        //VNDetectHumanHandPoseRequest detecta manos, suspuntos clave y la postura de los dedos
-        // {[weak self] request, error in self?.procesarResultadosManos(request:request,error:error)}: Cuando Vision termine de analizar un frame y detecte manos, ejecuta este bloque.
+        let handRequest = VNDetectHumanHandPoseRequest { [weak self] request, error in
+            self?.procesarResultadosManos(request: request, error: error)
+        }
         handRequest.maximumHandCount = 2
-        
         solicitudesVision = [handRequest]
-        
-//        Vision analiza el frame
-//        Vision detecta manos
-//        Vision llama tu closure
-//        Tú procesas el resultado en tu función procesarResultadosManos
     }
-    
-    
-    //Convertir puntos normalizados a coordenadas de pantalla
-    //Vision entrega puntos en coordenadas normalizadas (0–1)
+
     private func convertir(_ punto: VNRecognizedPoint, en size: CGSize) -> CGPoint {
         return CGPoint(
             x: punto.location.x * size.width,
-            y: (1 - punto.location.y) * size.height // invertir Y para UIKit
+            y: (1 - punto.location.y) * size.height
         )
     }
 
-    //Función para dibujar el esqueleto completo de la mano
-private func dibujarEsqueleto(para mano: VNHumanHandPoseObservation)
-{
-    guard let view = previewVC?.view else { return }
-    let size = view.bounds.size
-    let path = UIBezierPath()
+    private func dibujarEsqueleto(para mano: VNHumanHandPoseObservation) {
+        guard let view = previewVC?.view else { return }
+        let size = view.bounds.size
+        let shapeLayer = CAShapeLayer()
+        let path = UIBezierPath()
 
-    guard let puntos = try? mano.recognizedPoints(.all) else { return }
+        guard let puntos = try? mano.recognizedPoints(.all) else { return }
 
-    let conexiones: [(VNHumanHandPoseObservation.JointName, VNHumanHandPoseObservation.JointName)] = [
-        (.wrist, .thumbCMC), (.thumbCMC, .thumbMP), (.thumbMP, .thumbIP), (.thumbIP, .thumbTip),
-        (.wrist, .indexMCP), (.indexMCP, .indexPIP), (.indexPIP, .indexDIP), (.indexDIP, .indexTip),
-        (.wrist, .middleMCP), (.middleMCP, .middlePIP), (.middlePIP, .middleDIP), (.middleDIP, .middleTip),
-        (.wrist, .ringMCP), (.ringMCP, .ringPIP), (.ringPIP, .ringDIP), (.ringDIP, .ringTip),
-        (.wrist, .littleMCP), (.littleMCP, .littlePIP), (.littlePIP, .littleDIP), (.littleDIP, .littleTip),
-    ]
+        let conexiones: [(VNHumanHandPoseObservation.JointName, VNHumanHandPoseObservation.JointName)] = [
+            (.wrist, .thumbCMC), (.thumbCMC, .thumbMP), (.thumbMP, .thumbIP), (.thumbIP, .thumbTip),
+            (.wrist, .indexMCP), (.indexMCP, .indexPIP), (.indexPIP, .indexDIP), (.indexDIP, .indexTip),
+            (.wrist, .middleMCP), (.middleMCP, .middlePIP), (.middlePIP, .middleDIP), (.middleDIP, .middleTip),
+            (.wrist, .ringMCP), (.ringMCP, .ringPIP), (.ringPIP, .ringDIP), (.ringDIP, .ringTip),
+            (.wrist, .littleMCP), (.littleMCP, .littlePIP), (.littlePIP, .littleDIP), (.littleDIP, .littleTip),
+        ]
 
-    for (a, b) in conexiones {
-        if let p1 = puntos[a], p1.confidence > 0.3,
-           let p2 = puntos[b], p2.confidence > 0.3 {
-            let c1 = convertir(p1, en: size)
-            let c2 = convertir(p2, en: size)
-            path.move(to: c1)
-            path.addLine(to: c2)
+        for (a, b) in conexiones {
+            if let p1 = puntos[a], p1.confidence > 0.3,
+               let p2 = puntos[b], p2.confidence > 0.3 {
+                let c1 = convertir(p1, en: size)
+                let c2 = convertir(p2, en: size)
+                path.move(to: c1)
+                path.addLine(to: c2)
+            }
         }
-    }
 
-    for (_, p) in puntos {
-        if p.confidence > 0.3 {
-            let c = convertir(p, en: size)
-            let circle = UIBezierPath(ovalIn: CGRect(x: c.x-3, y: c.y-3, width: 6, height: 6))
-            path.append(circle)
+        for (_, p) in puntos {
+            if p.confidence > 0.3 {
+                let c = convertir(p, en: size)
+                let circle = UIBezierPath(ovalIn: CGRect(x: c.x-3, y: c.y-3, width: 6, height: 6))
+                path.append(circle)
+            }
         }
-    }
 
-    DispatchQueue.main.async {
+        DispatchQueue.main.async {
         // ✅ Reusar capa existente en lugar de crear una nueva cada frame
         if let existing = view.layer.sublayers?
             .first(where: { $0.name == "handSkeleton" }) as? CAShapeLayer
@@ -231,200 +206,138 @@ private func dibujarEsqueleto(para mano: VNHumanHandPoseObservation)
             view.layer.addSublayer(shapeLayer)
         }
     }
-}
 
-    
-    // Procesar resultados de manos
-    // Chris Alex modificar esta funcion para que haga uso del modelo
+        // shapeLayer.path = path.cgPath
+        // shapeLayer.strokeColor = UIColor.systemBlue.cgColor
+        // shapeLayer.fillColor = UIColor.systemBlue.withAlphaComponent(0.3).cgColor
+        // shapeLayer.lineWidth = 2
+        // shapeLayer.name = "handSkeleton"
+
+        // DispatchQueue.main.async {
+        //     view.layer.sublayers?.removeAll(where: { $0.name == "handSkeleton" })
+        //     view.layer.addSublayer(shapeLayer)
+        // }
+    }
+
     private func procesarResultadosManos(request: VNRequest, error: Error?)
     {
-        //request.results contiene el resultado del análisis de Vision.
-        // VNHumanHandPoseObservation que es la lista de manos detectadas.
         guard let observaciones = request.results as? [VNHumanHandPoseObservation], !observaciones.isEmpty
-        else
-        {
-            DispatchQueue.main.async
-            {
-                self.resultadoVision = ""
-            }
+        else {
+            DispatchQueue.main.async { self.resultadoVision = "" }
             return
         }
-        
-        //por cada mano detectada extramenos los puntos clave
-        
-      
-        for (i,mano) in observaciones.enumerated()
-        {
-            
+
+        for mano in observaciones {
             gestureEngine.process(observation: mano, gesturePhrases: gesturePhrases)
-            if let points = try? mano.recognizedPoints(.all) {
-                let order: [VNHumanHandPoseObservation.JointName] = [
-                    .wrist,
-                    .thumbCMC, .thumbMP, .thumbIP, .thumbTip,
-                    .indexMCP, .indexPIP, .indexDIP, .indexTip,
-                    .middleMCP, .middlePIP, .middleDIP, .middleTip,
-                    .ringMCP, .ringPIP, .ringDIP, .ringTip,
-                    .littleMCP, .littlePIP, .littleDIP, .littleTip
-                ]
-                var log = "=== LANDMARKS ===\n"
-                for (i, joint) in order.enumerated() {
-                    if let p = points[joint] {
-                        log += "[\(i)] x:\(String(format: "%.3f", p.location.x)) y:\(String(format: "%.3f", p.location.y)) conf:\(String(format: "%.2f", p.confidence))\n"
-                    }
-                }
-                // print(log)
-            }
             dibujarEsqueleto(para: mano)
         }
-        // DispatchQueue.main.async
-        // {
-            
-        // }
-            
-//        Recibe el resultado de Vision
-//        Verifica si hay manos
-//        Saca el pulgar e índice de cada mano
-//        Calcula qué tan cerca están
-//        Decide si es "👌 OK" o "🤚 Palma Abierta"
-//        Actualiza la UI con el resultado
-        
     }
 }
 
 
-nonisolated extension  CamaraController :  AVCaptureVideoDataOutputSampleBufferDelegate
+nonisolated extension CamaraController: AVCaptureVideoDataOutputSampleBufferDelegate
 {
-    //procesar frames con vision
-    //Cuando AVFoundation captura un frame, llama a esta función
-     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection)
+    func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection)
     {
-        
-//        sampleBuffer = el frame crudo que da AVFoundation
-//        Lo conviertes a pixelBuffer, que es el formato que Vision usa para procesar imágenes
-//        Si no se puede convertir → simplemente saltas ese frame
-        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {return}
-        
-        //Calcular la orientación correcta del frame
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         let orientacion: CGImagePropertyOrientation = posicionActual == .front ? .leftMirrored : .right
-        
-        let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: orientacion, options:[:])
-        
-        do
-        {
+        let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: orientacion, options: [:])
+        do {
             try handler.perform(solicitudesVision)
+        } catch {
+            print("Error Vision: \(error)")
         }
-        catch
-        {
-            print("Error VIsion: \(error)")
-        }
-        
-//      Esta función recibe cada frame de la cámara, lo prepara para Vision y luego ejecuta la detección de manos usando las solicitudes configuradas. Es el puente entre AVFoundation y Vision.
     }
 }
-
-
 
 
 class CamaraPreviewViewController: UIViewController
 {
-    //es digamos el controlador de la vista a diferencia del del otro, su funcion es mostrar en pantalla el preview de la cámara usando un AVCaptureVideoPreviewLayer.
     var camaraController: CamaraController?
-    var previewLayer: AVCaptureVideoPreviewLayer? //Es la capa que renderiza el video en vivo directamente desde AVCaptureSession.
+    var previewLayer: AVCaptureVideoPreviewLayer?
 
     override func viewDidLoad()
     {
         super.viewDidLoad()
         view.backgroundColor = .black
-//        Este método se llama cuando la vista se crea.
-//        Solo pones el fondo negro (por si la cámara tarda en cargar).
-        
-            camaraController = CamaraController()
-            camaraController?.previewVC = self 
-            camaraController?.solicitarPermisos()
-
+        camaraController?.previewVC = self
+        camaraController?.solicitarPermisos()
     }
-    
+
     func agregarPreviewLayer(session: AVCaptureSession)
     {
-//        “Rellena toda la pantalla con el video, aunque se recorte un poco”.
-        previewLayer?.removeFromSuperlayer( )
-        let layer = AVCaptureVideoPreviewLayer(session:session)
+        previewLayer?.removeFromSuperlayer()
+        let layer = AVCaptureVideoPreviewLayer(session: session)
         layer.videoGravity = .resizeAspectFill
         layer.frame = view.bounds
-        view.layer.insertSublayer(layer, at:0)
+        layer.connection?.automaticallyAdjustsVideoMirroring = false
+        layer.connection?.isVideoMirrored = true
+        view.layer.insertSublayer(layer, at: 0)
         self.previewLayer = layer
     }
-    
-    override func viewDidLayoutSubviews( )
+
+    override func viewDidLayoutSubviews()
     {
         super.viewDidLayoutSubviews()
         previewLayer?.frame = view.bounds
-//        Este método se llama:
-//        cuando rota el dispositivo
-//        cuando cambia el tamaño de la vista
-//        en cambios de layout en general
     }
 }
 
 
-
 struct Camara: View
 {
-    @StateObject private var controller = CamaraController() //solo se crea una instancia del objecto
+    @StateObject private var controller = CamaraController()
     @State private var mostraraAlerta = false
-    
+
     var body: some View
     {
         ZStack
         {
             CamaraPreviewRepresentable(controller: controller).ignoresSafeArea()
-            
+
+            // <- NUEVO: loading screen
+            if !controller.camaraLista
+            {
+                ZStack
+                {
+                    Color.black.ignoresSafeArea()
+                    VStack(spacing: 16)
+                    {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                            .scaleEffect(1.5)
+                        Text("Iniciando cámara...")
+                            .foregroundColor(.white)
+                            .font(.system(size: 16, weight: .medium))
+                    }
+                }
+                .transition(.opacity)
+                .animation(.easeOut(duration: 0.4), value: controller.camaraLista)
+            }
+
             VStack
             {
                 if !controller.resultadoVision.isEmpty
                 {
                     Text(controller.resultadoVision)
-                        .font(.system(size:18,weight:.semibold))
+                        .font(.system(size: 18, weight: .semibold))
                         .foregroundColor(.white)
-                        .padding(.horizontal,16)
-                        .padding(.vertical,10)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
                         .background(Color.black.opacity(0.6))
                         .cornerRadius(12)
-                        .padding(.top,60)
+                        .padding(.top, 60)
                         .transition(.opacity)
-                        .animation(.easeInOut, value:controller.resultadoVision)
+                        .animation(.easeInOut, value: controller.resultadoVision)
                 }
-                
-                Spacer()
-                
-                HStack(spacing:48)
-                {
-                    Spacer()
-                    Button(action:{
-                        controller.cambiarCamara()
-                    }){
-                        Image(systemName:"arrow.triangle.2.circlepath.camera")
-                            .resizable()
-                            .scaledToFit()
-                            .frame(width:32,height:32)
-                            .foregroundColor(.white)
-                            .padding(16)
-                            .background(Color.black.opacity(0.5))
-                            .clipShape(Circle())
-                    }
-                    
-                    Spacer()
-                }
-                .padding(.bottom,48)
             }
-            
         }
         .navigationTitle("Camara")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear{
+        .onAppear {
             controller.solicitarPermisos()
         }
-        .onDisappear{
+        .onDisappear {
             controller.detener()
         }
         .alert("Sin permiso de camara", isPresented: $controller.mostrarAlertaPermisos)
@@ -436,11 +349,10 @@ struct Camara: View
                     UIApplication.shared.open(url)
                 }
             }
-            Button("Cancelar", role:.cancel){}
-        }message:{
-            Text("Activa el permiso de camara en ajsutes para usar esta funcion")
+            Button("Cancelar", role: .cancel) {}
+        } message: {
+            Text("Activa el permiso de camara en ajustes para usar esta funcion")
         }
-        
     }
 }
 
@@ -448,26 +360,22 @@ struct Camara: View
 struct CamaraPreviewRepresentable: UIViewControllerRepresentable
 {
     let controller: CamaraController
-    
+
     func makeUIViewController(context: Context) -> CamaraPreviewViewController
     {
         let vc = CamaraPreviewViewController()
         vc.camaraController = controller
         controller.previewVC = vc
         return vc
-        
     }
-    
-    func updateUIViewController(_ uiViewController: CamaraPreviewViewController, context: Context) {
-        
-    }
-}
 
+    func updateUIViewController(_ uiViewController: CamaraPreviewViewController, context: Context) {}
+}
 
 
 #Preview
 {
-    NavigationStack{
+    NavigationStack {
         Camara()
     }
 }
